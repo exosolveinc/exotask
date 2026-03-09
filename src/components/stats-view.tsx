@@ -295,7 +295,7 @@ export function StatsView({ employees, tasks }: StatsViewProps) {
           </p>
 
           <div className="grid grid-cols-2 gap-4">
-            {analysis.bottlenecks.length > 0 && (
+            {analysis.bottlenecks?.length > 0 && (
               <div>
                 <div className="text-[11px] text-zinc-500 uppercase tracking-wider mb-2">
                   Bottlenecks
@@ -317,7 +317,7 @@ export function StatsView({ employees, tasks }: StatsViewProps) {
               </div>
             )}
 
-            {analysis.recommendations.length > 0 && (
+            {analysis.recommendations?.length > 0 && (
               <div>
                 <div className="text-[11px] text-zinc-500 uppercase tracking-wider mb-2">
                   Recommendations
@@ -340,7 +340,7 @@ export function StatsView({ employees, tasks }: StatsViewProps) {
             )}
           </div>
 
-          {analysis.risk_tasks.length > 0 && (
+          {analysis.risk_tasks?.length > 0 && (
             <div>
               <div className="text-[11px] text-zinc-500 uppercase tracking-wider mb-2">
                 At-Risk Tasks
