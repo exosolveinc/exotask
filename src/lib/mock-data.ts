@@ -7,6 +7,7 @@ const hoursFromNow = (h: number) => new Date(now.getTime() + h * 3600000).toISOS
 export const mockEmployees: Employee[] = [
   {
     id: "emp-1",
+    auth_id: null,
     name: "Sariph Shrestha",
     nickname: "Sariph",
     email: "sariph@company.com",
@@ -26,6 +27,7 @@ export const mockEmployees: Employee[] = [
   },
   {
     id: "emp-2",
+    auth_id: null,
     name: "Prashant Parajuli",
     nickname: "Prashant",
     email: "prashant@company.com",
@@ -45,6 +47,7 @@ export const mockEmployees: Employee[] = [
   },
   {
     id: "emp-3",
+    auth_id: null,
     name: "Aayush Poudel",
     nickname: "Aayush",
     email: "aayush@company.com",
@@ -64,6 +67,7 @@ export const mockEmployees: Employee[] = [
   },
   {
     id: "emp-4",
+    auth_id: null,
     name: "Sushant Regmi",
     nickname: "Sushant",
     email: "sushant@company.com",

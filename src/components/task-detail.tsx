@@ -19,10 +19,7 @@ import {
 import { cn, priorityConfig, statusConfig, formatRelativeTime, displayName } from "@/lib/utils";
 import { supabase } from "@/lib/supabase/client";
 import { updateTask, updateTaskStatus, createTask } from "@/lib/hooks/use-tasks";
-import { mockTasks, mockEmployees } from "@/lib/mock-data";
 import type { Task, TaskActivity, TaskStatus } from "@/lib/supabase/types";
-
-const isMock = !process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL === "";
 
 interface TaskDetailProps {
   taskId: string;
@@ -90,46 +87,6 @@ export function TaskDetail({ taskId, onClose, onRefetch }: TaskDetailProps) {
   const [riskFactors, setRiskFactors] = useState<string[]>([]);
 
   const fetchTask = useCallback(async () => {
-    if (isMock) {
-      const allTasks = [...mockTasks, ...mockTasks.flatMap((t) => t.subtasks || [])];
-      const found = allTasks.find((t) => t.id === taskId);
-      if (found) setTask(found);
-      const subs = mockTasks.find((t) => t.id === taskId)?.subtasks || [];
-      setSubtasks(subs);
-      setActivity([
-        {
-          id: "act-1",
-          task_id: taskId,
-          actor_id: "emp-1",
-          activity_type: "progress_update" as const,
-          message: "70% wrapping up tests",
-          metadata: {},
-          created_at: new Date(Date.now() - 9000000).toISOString(),
-          actor: mockEmployees[0],
-        },
-        {
-          id: "act-2",
-          task_id: taskId,
-          actor_id: null,
-          activity_type: "tracker_ping" as const,
-          message: "Tracker pinged via slack",
-          metadata: {},
-          created_at: new Date(Date.now() - 3600000).toISOString(),
-        },
-        {
-          id: "act-3",
-          task_id: taskId,
-          actor_id: "emp-1",
-          activity_type: "created" as const,
-          message: "Created this task",
-          metadata: {},
-          created_at: new Date(Date.now() - 86400000).toISOString(),
-          actor: mockEmployees[0],
-        },
-      ]);
-      return;
-    }
-
     const { data } = await supabase
       .from("tasks")
       .select("*, assignee:employees!assignee_id(*)")

@@ -2,23 +2,13 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
-import { mockStore } from "@/lib/mock-store";
-import { mockEmployees } from "@/lib/mock-data";
 import type { Task, Employee } from "@/lib/supabase/types";
-
-const isMock = !process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL === "";
 
 export function useTasks() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
 
   const fetchTasks = useCallback(async () => {
-    if (isMock) {
-      setTasks(mockStore.getTasks());
-      setLoading(false);
-      return;
-    }
-
     const { data, error } = await supabase
       .from("tasks")
       .select("*, assignee:employees!assignee_id(*)")
@@ -48,14 +38,6 @@ export function useTasks() {
   useEffect(() => {
     fetchTasks();
 
-    if (isMock) {
-      // Subscribe to mock store changes
-      const unsub = mockStore.subscribe(() => {
-        setTasks(mockStore.getTasks());
-      });
-      return unsub;
-    }
-
     const channel = supabase
       .channel("tasks-realtime")
       .on(
@@ -77,26 +59,21 @@ export function useEmployees() {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    if (isMock) {
-      setEmployees(mockEmployees);
-      setLoading(false);
-      return;
-    }
-
-    async function fetch() {
-      const { data } = await supabase
-        .from("employees")
-        .select("*")
-        .eq("is_active", true)
-        .order("name");
-      if (data) setEmployees(data as Employee[]);
-      setLoading(false);
-    }
-    fetch();
+  const fetchEmployees = useCallback(async () => {
+    const { data } = await supabase
+      .from("employees")
+      .select("*")
+      .eq("is_active", true)
+      .order("name");
+    if (data) setEmployees(data as Employee[]);
+    setLoading(false);
   }, []);
 
-  return { employees, loading };
+  useEffect(() => {
+    fetchEmployees();
+  }, [fetchEmployees]);
+
+  return { employees, loading, refetch: fetchEmployees };
 }
 
 export async function createTask(input: {
@@ -108,10 +85,6 @@ export async function createTask(input: {
   description?: string;
   created_by_id?: string;
 }) {
-  if (isMock) {
-    return mockStore.addTask(input);
-  }
-
   const { data, error } = await supabase
     .from("tasks")
     .insert({
@@ -147,10 +120,6 @@ export async function createTask(input: {
 }
 
 export async function updateTask(taskId: string, updates: Partial<Task>) {
-  if (isMock) {
-    return mockStore.updateTask(taskId, updates);
-  }
-
   const { data, error } = await supabase
     .from("tasks")
     .update(updates as Record<string, unknown>)
@@ -167,10 +136,6 @@ export async function updateTaskStatus(
   status: Task["status"],
   actorId?: string
 ) {
-  if (isMock) {
-    return mockStore.updateTaskStatus(taskId, status);
-  }
-
   const updates: Partial<Task> = { status };
 
   if (status === "in_progress" && !updates.started_at) {

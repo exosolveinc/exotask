@@ -26,6 +26,7 @@ export type ActivityType =
 
 export interface Employee {
   id: string;
+  auth_id: string | null;
   name: string;
   nickname: string | null;
   email: string;
