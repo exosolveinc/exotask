@@ -5,6 +5,8 @@ const AGENTS = [
   { id: "task-analyzer", interval_minutes: 60 },
   { id: "deadline-guardian", interval_minutes: 30 },
   { id: "daily-digest", interval_minutes: 1440 },
+  { id: "risk-predictor", interval_minutes: 60 },
+  { id: "performance-snapshotter", interval_minutes: 1440 },
 ];
 
 // Simple in-memory last-run tracker (resets on cold start, which is fine —

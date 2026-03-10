@@ -7,6 +7,8 @@ import {
   AlertTriangle,
   TrendingUp,
   TrendingDown,
+  Users,
+  X,
 } from "lucide-react";
 import { cn, displayName, getInitials } from "@/lib/utils";
 import type { Employee, Task } from "@/lib/supabase/types";
@@ -132,9 +134,23 @@ interface AIAnalysis {
   estimated_team_velocity: string;
 }
 
+interface OneOnOnePrep {
+  praise: string[];
+  discuss: string[];
+  goals: string[];
+  risks: string[];
+  talking_points: string[];
+  overall_assessment: string;
+}
+
 export function StatsView({ employees, tasks }: StatsViewProps) {
   const [analysis, setAnalysis] = useState<AIAnalysis | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
+
+  // 1:1 Prep state
+  const [prepEmployee, setPrepEmployee] = useState<Employee | null>(null);
+  const [prepData, setPrepData] = useState<OneOnOnePrep | null>(null);
+  const [prepLoading, setPrepLoading] = useState(false);
 
   const allSubtasks = tasks.flatMap((t) => t.subtasks || []);
   const allTasks = [...tasks, ...allSubtasks];
@@ -198,6 +214,27 @@ export function StatsView({ employees, tasks }: StatsViewProps) {
       // silently fail
     } finally {
       setAnalyzing(false);
+    }
+  }
+
+  async function runOneOnOnePrep(emp: Employee) {
+    setPrepEmployee(emp);
+    setPrepLoading(true);
+    setPrepData(null);
+    try {
+      const res = await fetch("/api/ai/prep-one-on-one", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ employee_id: emp.id }),
+      });
+      const data = await res.json();
+      if (res.ok && data.praise) {
+        setPrepData(data);
+      }
+    } catch {
+      // silent
+    } finally {
+      setPrepLoading(false);
     }
   }
 
@@ -401,6 +438,9 @@ export function StatsView({ employees, tasks }: StatsViewProps) {
               <th className="text-center text-[11px] font-medium text-zinc-500 uppercase tracking-wider px-4 py-3">
                 Trend
               </th>
+              <th className="text-center text-[11px] font-medium text-zinc-500 uppercase tracking-wider px-4 py-3">
+                Actions
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -490,12 +530,110 @@ export function StatsView({ employees, tasks }: StatsViewProps) {
                       />
                     )}
                   </td>
+                  <td className="px-4 py-3 text-center">
+                    <button
+                      onClick={() => runOneOnOnePrep(emp)}
+                      className="px-2 py-1 text-[10px] rounded border border-purple-500/30 text-purple-400 hover:bg-purple-500/10 transition-colors"
+                    >
+                      <Users size={10} className="inline mr-1" />
+                      1:1 Prep
+                    </button>
+                  </td>
                 </tr>
               );
             })}
           </tbody>
         </table>
       </div>
+
+      {/* 1:1 Prep Modal */}
+      {prepEmployee && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm" onClick={() => { setPrepEmployee(null); setPrepData(null); }} />
+          <div className="relative w-full max-w-lg max-h-[80vh] overflow-y-auto bg-zinc-900 border border-zinc-700/50 rounded-xl shadow-2xl p-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Users size={16} className="text-purple-400" />
+                <h3 className="text-sm font-medium text-zinc-100">1:1 Prep — {displayName(prepEmployee)}</h3>
+              </div>
+              <button onClick={() => { setPrepEmployee(null); setPrepData(null); }} className="text-zinc-500 hover:text-zinc-300">
+                <X size={16} />
+              </button>
+            </div>
+
+            {prepLoading && (
+              <div className="flex items-center gap-2 py-8 justify-center text-sm text-purple-300">
+                <Loader size={14} className="animate-spin" /> Generating prep notes...
+              </div>
+            )}
+
+            {prepData && (
+              <div className="space-y-4">
+                <p className="text-sm text-zinc-400 leading-relaxed">{prepData.overall_assessment}</p>
+
+                {prepData.praise.length > 0 && (
+                  <div>
+                    <div className="text-[11px] text-emerald-400 uppercase tracking-wider mb-1.5">Praise</div>
+                    <ul className="space-y-1">
+                      {prepData.praise.map((p, i) => (
+                        <li key={i} className="text-sm text-zinc-300 flex items-start gap-1.5">
+                          <TrendingUp size={10} className="text-emerald-400 mt-1 shrink-0" /> {p}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {prepData.discuss.length > 0 && (
+                  <div>
+                    <div className="text-[11px] text-yellow-400 uppercase tracking-wider mb-1.5">Discuss</div>
+                    <ul className="space-y-1">
+                      {prepData.discuss.map((d, i) => (
+                        <li key={i} className="text-sm text-zinc-300 flex items-start gap-1.5">
+                          <AlertTriangle size={10} className="text-yellow-400 mt-1 shrink-0" /> {d}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {prepData.goals.length > 0 && (
+                  <div>
+                    <div className="text-[11px] text-blue-400 uppercase tracking-wider mb-1.5">Suggested Goals</div>
+                    <ul className="space-y-1">
+                      {prepData.goals.map((g, i) => (
+                        <li key={i} className="text-sm text-zinc-300">• {g}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {prepData.risks.length > 0 && (
+                  <div>
+                    <div className="text-[11px] text-red-400 uppercase tracking-wider mb-1.5">Risks</div>
+                    <ul className="space-y-1">
+                      {prepData.risks.map((r, i) => (
+                        <li key={i} className="text-sm text-zinc-300">• {r}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {prepData.talking_points.length > 0 && (
+                  <div>
+                    <div className="text-[11px] text-zinc-500 uppercase tracking-wider mb-1.5">Talking Points</div>
+                    <ul className="space-y-1">
+                      {prepData.talking_points.map((t, i) => (
+                        <li key={i} className="text-sm text-zinc-400">• {t}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

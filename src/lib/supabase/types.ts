@@ -93,6 +93,50 @@ export interface TrackerQueue {
   created_at: string;
 }
 
+// AI Insights — persistent AI observations
+export type InsightType = "risk_alert" | "rebalance_suggestion" | "pattern_observation" | "decomposition";
+export type InsightStatus = "pending" | "acknowledged" | "dismissed";
+
+export interface AIInsight {
+  id: string;
+  type: InsightType;
+  task_id: string | null;
+  employee_id: string | null;
+  message: string;
+  metadata: Record<string, unknown>;
+  status: InsightStatus;
+  created_at: string;
+}
+
+// AI Proposals — agent-suggested actions requiring approval
+export type ProposalAction = "reassign" | "extend_deadline" | "escalate_priority" | "decompose" | "rebalance";
+export type ProposalStatus = "pending" | "approved" | "rejected";
+
+export interface AIProposal {
+  id: string;
+  agent_id: string;
+  action_type: ProposalAction;
+  target_task_id: string | null;
+  proposed_changes: Record<string, unknown>;
+  reasoning: string;
+  status: ProposalStatus;
+  created_at: string;
+  resolved_at: string | null;
+}
+
+// Performance Snapshots — daily employee metric captures
+export interface PerformanceSnapshot {
+  id: string;
+  employee_id: string;
+  snapshot_date: string;
+  tasks_completed: number;
+  on_time_percentage: number;
+  avg_variance_ratio: number;
+  avg_response_minutes: number;
+  active_task_count: number;
+  created_at: string;
+}
+
 // Supabase generated database type (simplified)
 export interface Database {
   public: {

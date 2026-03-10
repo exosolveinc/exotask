@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import Anthropic from "@anthropic-ai/sdk";
+import Groq from "groq-sdk";
 import { createClient } from "@supabase/supabase-js";
 
 const supabase = createClient(
@@ -8,10 +8,10 @@ const supabase = createClient(
 );
 
 export async function POST(req: Request) {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey || apiKey === "placeholder") {
+  const groqKey = process.env.GROQ_API_KEY;
+  if (!groqKey) {
     return NextResponse.json(
-      { error: "ANTHROPIC_API_KEY not configured" },
+      { error: "GROQ_API_KEY not configured" },
       { status: 500 }
     );
   }
@@ -39,22 +39,26 @@ export async function POST(req: Request) {
     )
     .join("\n");
 
-  const client = new Anthropic({ apiKey });
+  const groq = new Groq({ apiKey: groqKey });
 
-  const message = await client.messages.create({
-    model: "claude-haiku-4-5-20251001",
+  const completion = await groq.chat.completions.create({
+    model: "llama-3.3-70b-versatile",
     max_tokens: 300,
+    temperature: 0.3,
+    response_format: { type: "json_object" },
     messages: [
       {
+        role: "system",
+        content: `You are a task management AI. Given a task title and team context, suggest the best configuration. Respond ONLY with valid JSON.`,
+      },
+      {
         role: "user",
-        content: `You are a task management AI. Given a task title and team context, suggest the best configuration.
-
-Task: "${title}"${description ? `\nDescription: "${description}"` : ""}
+        content: `Task: "${title}"${description ? `\nDescription: "${description}"` : ""}
 
 Team:
 ${teamContext}
 
-Respond ONLY with valid JSON (no markdown, no explanation):
+Return JSON:
 {
   "priority": "P0 or P1 or P2 or P3",
   "assignee_id": "<exact id string from team list, or null>",
@@ -74,14 +78,11 @@ Rules:
   });
 
   try {
-    let text =
-      message.content[0].type === "text" ? message.content[0].text : "";
-    // Strip markdown code fences if present
-    text = text.replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?```\s*$/i, "").trim();
+    const text = completion.choices[0]?.message?.content || "";
     const suggestion = JSON.parse(text);
     return NextResponse.json(suggestion);
   } catch (e) {
-    const raw = message.content[0].type === "text" ? message.content[0].text : "";
+    const raw = completion.choices[0]?.message?.content || "";
     console.error("[AI suggest] Failed to parse:", raw, e);
     return NextResponse.json(
       { error: "Failed to parse AI response", raw },

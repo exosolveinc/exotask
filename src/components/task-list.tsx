@@ -110,21 +110,68 @@ function InlineTaskCreator({
   depth = 0,
 }: InlineTaskCreatorProps) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const [value, setValue] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [suggestion, setSuggestion] = useState<AISuggestion | null>(null);
   const [loadingSuggestion, setLoadingSuggestion] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // @mention autocomplete state
+  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const [mentionStart, setMentionStart] = useState(-1);
+
+  // Manual field overrides
+  const [manualPriority, setManualPriority] = useState<TaskPriority | null>(null);
+  const [manualAssignee, setManualAssignee] = useState<Employee | null>(null);
+
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
 
-  // Debounced AI suggestion fetch — triggers on any title 3+ chars
+  // Detect @mention as user types
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const newValue = e.target.value;
+    setValue(newValue);
+
+    const cursorPos = e.target.selectionStart || 0;
+    const textBeforeCursor = newValue.slice(0, cursorPos);
+    const atMatch = textBeforeCursor.match(/@(\w*)$/);
+
+    if (atMatch) {
+      setMentionQuery(atMatch[1].toLowerCase());
+      setMentionStart(cursorPos - atMatch[0].length);
+      setMentionIndex(0);
+    } else {
+      setMentionQuery(null);
+      setMentionStart(-1);
+    }
+  };
+
+  const filteredEmployees = mentionQuery !== null
+    ? employees.filter(
+        (e) =>
+          e.name.toLowerCase().includes(mentionQuery) ||
+          (e.nickname && e.nickname.toLowerCase().includes(mentionQuery))
+      )
+    : [];
+
+  const selectMention = (emp: Employee) => {
+    const name = displayName(emp).toLowerCase();
+    const before = value.slice(0, mentionStart);
+    const afterAt = value.slice(mentionStart).replace(/@\w*/, "");
+    setValue(`${before}@${name}${afterAt}`);
+    setManualAssignee(emp);
+    setMentionQuery(null);
+    setMentionStart(-1);
+    inputRef.current?.focus();
+  };
+
+  // Debounced AI suggestion fetch
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
 
-    // Strip shortcut syntax to get the raw title for AI
     const trimmed = value.trim()
       .replace(/@\w+/g, "")
       .replace(/\bP[0-3]\b/gi, "")
@@ -169,9 +216,8 @@ function InlineTaskCreator({
       setSubmitting(true);
       const parsed = parseShortcuts(trimmed, employees);
 
-      // Auto-apply AI suggestion for fields the user didn't manually specify
-      const finalAssignee = parsed.assignee_id || suggestion?.assignee_id || undefined;
-      const finalPriority = parsed.priority || (suggestion?.priority ? suggestion.priority as TaskPriority : undefined);
+      const finalAssignee = manualAssignee?.id || parsed.assignee_id || suggestion?.assignee_id || undefined;
+      const finalPriority = manualPriority || parsed.priority || (suggestion?.priority ? suggestion.priority as TaskPriority : undefined);
       const finalDue = parsed.due_at || (suggestion?.suggested_deadline_hours
         ? new Date(Date.now() + suggestion.suggested_deadline_hours * 3600000).toISOString()
         : undefined);
@@ -188,6 +234,8 @@ function InlineTaskCreator({
         if (continueAdding) {
           setValue("");
           setSuggestion(null);
+          setManualPriority(null);
+          setManualAssignee(null);
           inputRef.current?.focus();
         } else {
           onCancel();
@@ -198,10 +246,34 @@ function InlineTaskCreator({
         setSubmitting(false);
       }
     },
-    [value, submitting, employees, parentId, onCreated, onCancel, suggestion]
+    [value, submitting, employees, parentId, onCreated, onCancel, suggestion, manualPriority, manualAssignee]
   );
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Handle mention navigation
+    if (mentionQuery !== null && filteredEmployees.length > 0) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setMentionIndex((i) => Math.min(i + 1, filteredEmployees.length - 1));
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setMentionIndex((i) => Math.max(i - 1, 0));
+        return;
+      }
+      if (e.key === "Enter" || e.key === "Tab") {
+        e.preventDefault();
+        selectMention(filteredEmployees[mentionIndex]);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setMentionQuery(null);
+        return;
+      }
+    }
+
     if (e.key === "Enter" && e.shiftKey) {
       e.preventDefault();
       handleSubmit(true);
@@ -217,49 +289,137 @@ function InlineTaskCreator({
     ? employees.find((e) => e.id === suggestion.assignee_id)
     : null;
 
+  const priorities: TaskPriority[] = ["P0", "P1", "P2", "P3"];
+
   return (
     <div
-      className="space-y-1"
+      ref={containerRef}
+      className="space-y-1.5 relative"
       style={{ marginLeft: `${12 + depth * 20}px`, marginRight: "12px" }}
     >
-      <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-zinc-800/60 ring-1 ring-zinc-700/50">
-        <Plus size={14} className="text-zinc-500 shrink-0" />
-        <input
-          ref={inputRef}
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          onKeyDown={handleKeyDown}
-          onBlur={() => {
-            // delay to allow clicking suggestion
-            setTimeout(() => {
-              if (!value.trim()) onCancel();
-            }, 200);
-          }}
-          placeholder={
-            parentId
-              ? "Subtask title... (@name P1 /2d)"
-              : "Task title... (@name P1 /2d)"
-          }
-          className="flex-1 bg-transparent text-sm text-zinc-200 placeholder:text-zinc-600 outline-none"
-          disabled={submitting}
-        />
-        {loadingSuggestion && (
-          <Loader size={12} className="text-zinc-600 animate-spin shrink-0" />
-        )}
-        <span className="text-[10px] text-zinc-600 shrink-0">
-          Enter to add{" "}
-          <span className="text-zinc-500">Shift+Enter</span> for another
-        </span>
+      <div className="rounded-xl bg-zinc-800/70 ring-1 ring-zinc-700/50 overflow-hidden">
+        {/* Input row */}
+        <div className="flex items-center gap-2 px-3 py-2.5">
+          <Plus size={14} className="text-zinc-500 shrink-0" />
+          <input
+            ref={inputRef}
+            value={value}
+            onChange={handleInputChange}
+            onKeyDown={handleKeyDown}
+            onBlur={() => {
+              setTimeout(() => {
+                if (!value.trim() && !mentionQuery) onCancel();
+              }, 200);
+            }}
+            placeholder={
+              parentId
+                ? "Subtask title... (type @ to assign)"
+                : "What needs to be done? (type @ to assign)"
+            }
+            className="flex-1 bg-transparent text-sm text-zinc-200 placeholder:text-zinc-600 outline-none"
+            disabled={submitting}
+          />
+          {loadingSuggestion && (
+            <Loader size={12} className="text-purple-400 animate-spin shrink-0" />
+          )}
+        </div>
+
+        {/* Toolbar row */}
+        <div className="flex items-center gap-2 px-3 py-2 border-t border-zinc-700/40 bg-zinc-800/40">
+          {/* Priority selector */}
+          <div className="flex items-center gap-1">
+            {priorities.map((p) => {
+              const config = priorityConfig[p];
+              const isSelected = manualPriority === p;
+              return (
+                <button
+                  key={p}
+                  onClick={() => setManualPriority(isSelected ? null : p)}
+                  className={cn(
+                    "text-[10px] font-mono px-1.5 py-0.5 rounded border transition-all",
+                    isSelected
+                      ? config.bg + " ring-1 ring-white/10"
+                      : "border-zinc-700/30 text-zinc-600 hover:text-zinc-400 hover:border-zinc-600/50"
+                  )}
+                >
+                  {p}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="w-px h-4 bg-zinc-700/40" />
+
+          {/* Assignee chip */}
+          {manualAssignee ? (
+            <button
+              onClick={() => setManualAssignee(null)}
+              className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-blue-500/15 border border-blue-500/30 text-[11px] text-blue-300 hover:bg-blue-500/25 transition-colors"
+            >
+              <div className="w-4 h-4 rounded-full bg-blue-500/20 flex items-center justify-center text-[8px] font-medium">
+                {getInitials(manualAssignee.name)}
+              </div>
+              {displayName(manualAssignee)}
+              <XCircle size={10} className="text-blue-400/60" />
+            </button>
+          ) : (
+            <span className="text-[10px] text-zinc-600">type @ to assign</span>
+          )}
+
+          <div className="flex-1" />
+
+          <span className="text-[10px] text-zinc-600 shrink-0">
+            <kbd className="px-1 py-0.5 bg-zinc-700/40 rounded text-[9px]">↵</kbd> add
+            {" "}
+            <kbd className="px-1 py-0.5 bg-zinc-700/40 rounded text-[9px]">⇧↵</kbd> another
+            {" "}
+            <kbd className="px-1 py-0.5 bg-zinc-700/40 rounded text-[9px]">esc</kbd> cancel
+          </span>
+        </div>
       </div>
 
-      {/* AI Suggestion — auto-applied, shown as preview */}
-      {suggestion && (
+      {/* @mention autocomplete dropdown */}
+      {mentionQuery !== null && filteredEmployees.length > 0 && (
+        <div className="absolute left-0 right-0 z-50 mt-0 bg-zinc-900 border border-zinc-700/50 rounded-lg shadow-xl overflow-hidden">
+          {filteredEmployees.map((emp, i) => (
+            <button
+              key={emp.id}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                selectMention(emp);
+              }}
+              className={cn(
+                "w-full flex items-center gap-2.5 px-3 py-2 text-left transition-colors",
+                i === mentionIndex
+                  ? "bg-zinc-800 text-zinc-100"
+                  : "text-zinc-400 hover:bg-zinc-800/50"
+              )}
+            >
+              <div className="w-6 h-6 rounded-full bg-zinc-700 flex items-center justify-center text-[10px] font-medium text-zinc-300 border border-zinc-600/50">
+                {getInitials(emp.name)}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-sm truncate">{emp.name}</div>
+                {emp.nickname && (
+                  <div className="text-[10px] text-zinc-600">{emp.nickname}</div>
+                )}
+              </div>
+              <span className="text-[10px] text-zinc-600 shrink-0">{emp.role}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* AI Suggestion preview */}
+      {suggestion && !mentionQuery && (
         <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-purple-500/8 border border-purple-500/20">
           <Sparkles size={12} className="text-purple-400 shrink-0" />
           <span className="text-[11px] text-purple-300/80 flex-1">
-            AI will assign:{" "}
-            <span className="text-purple-300 font-medium">{suggestion.priority}</span>
-            {suggestedEmployee && (
+            AI suggests:{" "}
+            {!manualPriority && (
+              <span className="text-purple-300 font-medium">{suggestion.priority}</span>
+            )}
+            {suggestedEmployee && !manualAssignee && (
               <>
                 {" "}→{" "}
                 <span className="text-purple-300 font-medium">

@@ -2,7 +2,7 @@
 
 **AI-powered task management system that acts as your team's autonomous delivery manager.**
 
-ExoTask doesn't just track tasks — it actively enforces accountability through intelligent agents that monitor progress, estimate work, guard deadlines, and escalate through multiple communication channels when developers go dark. Think of it as a relentless but friendly AI PM that never sleeps, never forgets, and always follows up.
+ExoTask doesn't just track tasks — it actively enforces accountability through intelligent agents that monitor progress, estimate work, guard deadlines, predict risk, and escalate through multiple communication channels when developers go dark. Think of it as a relentless but friendly AI PM that never sleeps, never forgets, and always follows up.
 
 Built for small dev teams (3–8 people) who want structure without the overhead of a full-time project manager.
 
@@ -12,9 +12,12 @@ Built for small dev teams (3–8 people) who want structure without the overhead
 
 - [Core Philosophy](#core-philosophy)
 - [Features Overview](#features-overview)
+- [AI Model Architecture](#ai-model-architecture)
 - [AI Agents — The Brain](#ai-agents--the-brain)
+- [AI Intelligence Layer](#ai-intelligence-layer)
+- [AI Proposals System](#ai-proposals-system)
 - [Escalation System](#escalation-system)
-- [AI-Powered Task Intelligence](#ai-powered-task-intelligence)
+- [Risk Scoring Engine](#risk-scoring-engine)
 - [Slack Integration](#slack-integration)
 - [Frontend Application](#frontend-application)
 - [Architecture & API Reference](#architecture--api-reference)
@@ -35,8 +38,10 @@ Built for small dev teams (3–8 people) who want structure without the overhead
 1. **No task should go silent.** If someone's assigned work and they haven't updated in 24 hours, the system notices and acts.
 2. **Priority drives urgency.** A P0 bug gets pinged every 2.5 minutes. A P3 nice-to-have gets checked once every 7.5 minutes. The system adapts its urgency to match the task's importance.
 3. **Escalation has teeth.** Starting with a friendly Slack DM, the system will escalate through WhatsApp, phone calls, and finally manager notification if a developer remains unresponsive.
-4. **AI provides the analysis, not just the tracking.** Claude reads the full team context — workload, variance ratios, on-time percentages, deadlines — and produces human-quality assessments with specific names, numbers, and actionable recommendations.
+4. **AI provides the analysis, not just the tracking.** The system reads the full team context — workload, variance ratios, on-time percentages, deadlines — and produces human-quality assessments with specific names, numbers, and actionable recommendations.
 5. **Estimation improves over time.** The system tracks how long tasks actually take vs. AI estimates, building a per-developer variance profile that gets more accurate with each completed task.
+6. **Dual-model AI routing.** Latency-sensitive operations (inline suggestions, command parsing, queries) use Groq for sub-200ms responses. Deep analytical tasks (decomposition, meeting prep, daily digest) use Anthropic Claude for higher reasoning quality.
+7. **Human-in-the-loop governance.** AI agents propose actions (reassignments, deadline extensions, priority changes) but never execute them automatically — humans approve or reject through the Proposals Panel.
 
 ---
 
@@ -44,8 +49,14 @@ Built for small dev teams (3–8 people) who want structure without the overhead
 
 ### Task Management
 - **Create tasks** with title, description, priority (P0–P3), assignee, deadline, and parent task
+- **Three creation modes** in the Command Bar (`Cmd+K`):
+  - **Structured syntax**: `/task @prashant Fix auth bug P1 --due tomorrow`
+  - **Natural language**: Type anything > 5 characters and the AI parses it into a structured task
+  - **AI query**: Start with `?` to ask questions about your team/tasks
 - **Inline shortcut syntax** in the task list input: `@prashant P1 /2d Fix the login bug` — assigns to Prashant, sets P1 priority, sets deadline to 2 days from now
+- **@mention autocomplete** — type `@` followed by characters and get a filtered dropdown of team members with arrow key navigation
 - **Subtask support** — break down large tasks into sub-items, each independently trackable
+- **AI decomposition** — click "Generate Plan" on any task to have Claude break it into 3–7 subtasks with estimates, assignees, dependencies, and priorities, then "Apply Plan" to create them all at once
 - **Status workflow**: `pending` → `acknowledged` → `in_progress` → `blocked` → `review` → `done` (or `cancelled`)
 - **Progress tracking** with 0–100% granularity
 - **Real-time updates** via Supabase Postgres changes subscription — the UI updates instantly when any task changes in the database
@@ -53,23 +64,59 @@ Built for small dev teams (3–8 people) who want structure without the overhead
 
 ### Task Detail Panel
 - Full task view with all metadata: priority, status, assignee, deadline, progress, AI estimate, actual hours
+- **Risk score badge** — computed client-side using the same sigmoid-based algorithm as the Risk Predictor agent, showing High/Medium/Low with percentage
+- **Risk factors panel** — lists specific reasons for the risk score (overdue, progress behind expected, low assignee reliability, etc.)
+- **Calibrated estimate display** — shows both raw AI estimate and calibrated estimate (raw × assignee's historical variance ratio)
+- **AI decomposition section** — "Generate Plan" button calls Claude to decompose the task, shows a preview of subtasks with priorities, estimates, and dependencies, "Apply Plan" creates all subtasks
 - **Activity timeline** showing every event: creation, status changes, tracker pings, escalations, responses, progress updates
 - **Tracker configuration** per task: enable/disable tracking, set ping interval (15m / 30m / 1h / 2h / 4h)
 - **Status quick-change** buttons for the full workflow
 - **Subtask management** — add subtasks inline from the detail view
 
-### Command Bar (Cmd+K)
+### Command Bar (`Cmd+K`)
 - Global command palette powered by `cmdk`
-- Quick actions: create task, view tasks, open stats, open tracker settings
-- **Quick task creation**: type `/task @prashant Fix auth bug P1 --due tomorrow` and hit Enter
+- **Three input modes:**
+  - `/task @name Title P1 --due 2d` — structured task creation (original syntax preserved)
+  - Plain text (> 5 chars, no `/` prefix) — AI-powered natural language parsing via Groq
+  - `?` prefix or suffix — AI query answering with inline results and metric highlights
+- Quick actions: create task, ask AI, view tasks, team stats, tracker settings
 - Employee directory for quick assignment
+- **AI query results** display inline with type-aware icons (info/warning/success) and metric highlight cards
+- **NL parsing indicator** shows "AI is parsing your command..." while processing
 - Keyboard navigation with arrow keys and Enter
+
+---
+
+## AI Model Architecture
+
+ExoTask uses a **dual-model routing strategy** to balance speed and reasoning quality:
+
+### Groq (LLaMA 3.3 70B) — Fast Path
+Used for latency-sensitive operations where sub-200ms response time matters:
+
+| Route | Purpose | Why Groq |
+|-------|---------|----------|
+| `/api/ai/suggest` | Inline task suggestions (priority, assignee, estimate) | Fires on 500ms debounce while user types |
+| `/api/ai/parse-command` | Natural language → structured task | Must feel instant in the command bar |
+| `/api/ai/query` | Team/task queries from command bar | Inline results need to appear quickly |
+
+All Groq calls use `response_format: { type: "json_object" }` for reliable structured output.
+
+### Anthropic Claude (Haiku 4.5) — Deep Path
+Used for analytical tasks where reasoning quality matters more than speed:
+
+| Route | Purpose | Why Claude |
+|-------|---------|------------|
+| `/api/agents/task-analyzer` | Full team workload analysis | Needs to synthesize complex team dynamics |
+| `/api/agents/daily-digest` | Morning standup generation | Requires personality, narrative, and nuance |
+| `/api/ai/decompose` | Task → subtask decomposition | Must reason about dependencies and skill matching |
+| `/api/ai/prep-one-on-one` | 1:1 meeting preparation | Needs empathetic, manager-appropriate analysis |
 
 ---
 
 ## AI Agents — The Brain
 
-Four autonomous agents run on configurable schedules, each with a specific responsibility. They operate independently and post all activity to a dedicated Slack channel with rich Block Kit formatting.
+Six autonomous agents run on configurable schedules, each with a specific responsibility. They operate independently and post all activity to a dedicated Slack channel with rich Block Kit formatting.
 
 ### 1. Update Checker
 **Schedule:** Every 5 minutes | **Route:** `POST /api/agents/update-checker`
@@ -98,9 +145,6 @@ The agent sends different messages based on task status:
 
 Each message includes urgency prefixes for P0/P1 and deadline context (overdue, due today, due in Xh).
 
-**Slack channel summary:**
-Posts to `#exotask-agents` with sections for pinged tasks, escalations, and stale prods. Uses `:speech_balloon:`, `:arrow_up:`, `:eyes:` emoji and quote blocks for each item.
-
 ---
 
 ### 2. Task Analyzer
@@ -122,9 +166,6 @@ The prompt instructs Claude to act as "ExoTask's senior analyst — sharp, warm,
 - `:dart: *Action Items*` — 2-3 specific, actionable items with `:one:` `:two:` `:three:` numbering
 - Closing witty one-liner in italics
 
-**Slack output:**
-Posts via `logAgentActivity` with a purple (`#6C5CE7`) colored sidebar, crystal ball emoji, and "Strategic Analysis" tagline in the footer.
-
 ---
 
 ### 3. Deadline Guardian
@@ -139,17 +180,8 @@ The watchdog. Scans all tasks with deadlines in the next 24 hours and takes acti
    - **Critical** (`hoursRemaining <= 4`): Due within 4 hours
    - **Warning** (`hoursRemaining <= 24`): Due within 24 hours
 3. Logs `task_activity` entries for overdue and critical tasks
-4. **DMs assignees directly** via Slack for overdue and critical tasks:
-   - Overdue: "Hey {name}, just a heads up — *"{title}"* was due {X}h ago. Can you push an update or let me know where things stand?"
-   - Critical: "{name}, *"{title}"* is due in about {X}h — you're in the home stretch!"
+4. **DMs assignees directly** via Slack for overdue and critical tasks
 5. Posts a color-coded summary to the agent channel
-
-**Slack channel format:**
-- `:red_circle: *Overdue — needs immediate attention*` with `:small_red_triangle:` per task
-- `:large_orange_circle: *Due very soon*` with `:hourglass_flowing_sand:` per task
-- `:large_blue_circle: *Heads up — due within 24h*` with `:clock3:` per task
-
-Uses a red (`#E17055`) colored sidebar with shield emoji.
 
 ---
 
@@ -158,24 +190,156 @@ Uses a red (`#E17055`) colored sidebar with shield emoji.
 
 The morning standup host. Uses Claude AI to generate a full daily briefing.
 
-**What it does:**
-1. Fetches all activity from the last 24 hours (with joined task data)
-2. Fetches all active tasks with assignee details
-3. Fetches all active employees with performance stats
-4. Sends everything to Claude Haiku with a standup host personality prompt
-
-**AI personality:**
-"ExoTask's daily standup host — a warm, sharp PM who makes status updates feel like a conversation, not a chore." Varies greetings daily, references the day of the week, adds wit.
-
 **Output format:**
 - `:coffee: *Good morning, team!*` — warm greeting with personality
 - `:white_check_mark: *Yesterday's Wins*` — completed tasks or note if none
-- `:clipboard: *Today's Board*` — each task with colored circle health indicator (`:red_circle:` blocked/overdue, `:large_orange_circle:` at-risk, `:large_blue_circle:` on-track), owner, progress, due date
+- `:clipboard: *Today's Board*` — each task with colored circle health indicator
 - `:warning: *Blockers & Red Flags*` — anything blocked, overdue, or suspiciously quiet
 - `:dart: *Today's Priorities*` — 2-3 numbered action items
 - Motivational one-liner closing
 
-Also logs itself as a `task_activity` entry and uses a green (`#00B894`) sidebar with newspaper emoji.
+---
+
+### 5. Risk Predictor
+**Schedule:** Every 60 minutes | **Route:** `POST /api/agents/risk-predictor`
+
+The risk engine. Uses deterministic multi-factor scoring to assess delivery risk for every active task. See [Risk Scoring Engine](#risk-scoring-engine) for the full algorithm.
+
+**What it does:**
+1. Fetches all active tasks with joined assignee data (performance metrics)
+2. Computes a 0–100 risk score for each task using sigmoid normalization
+3. Stores high-risk alerts (score >= 60) as `ai_insights` records
+4. Detects workload imbalances using priority-weighted effective load per employee
+5. Creates `ai_proposals` for workload rebalancing when imbalances are detected
+6. Posts risk summaries and rebalancing suggestions to Slack
+
+**Workload balancing algorithm:**
+- Computes effective load per employee: `remaining_hours × priority_weight` (P0=4x, P1=3x, P2=2x, P3=1x)
+- Identifies overloaded employees (load > 2× team average)
+- Identifies underloaded employees (load < 0.5× team average)
+- Proposes transferring lowest-priority pending tasks from overloaded to underloaded
+
+---
+
+### 6. Performance Snapshotter
+**Schedule:** Once per day (every 1440 minutes) | **Route:** `POST /api/agents/performance-snapshotter`
+
+The metrics historian. Captures daily performance snapshots for trend analysis and 1:1 meeting prep.
+
+**What it does:**
+1. Fetches all active employees and their current metrics
+2. Counts active tasks per employee
+3. Creates a `performance_snapshots` record per employee per day
+4. Deduplicates — skips if a snapshot already exists for today
+5. Reports creation/skip counts to Slack
+
+**Captured metrics:**
+- `tasks_completed` — total at snapshot time
+- `on_time_percentage` — percentage of tasks completed before deadline
+- `avg_variance_ratio` — average of actual_hours / ai_estimate_hours
+- `avg_response_minutes` — average response time to tracker pings
+- `active_task_count` — number of in-progress tasks at snapshot time
+
+---
+
+## AI Intelligence Layer
+
+Beyond the agents, ExoTask provides several AI-powered capabilities accessible from the UI:
+
+### Natural Language Task Creation
+**Route:** `POST /api/ai/parse-command` | **Model:** Groq
+
+Type anything natural in the command bar — the AI parses it into structured task data:
+- Input: `"assign prash to fix the login page by friday, high priority"`
+- Output: `{ title: "Fix the login page", assignee_id: "<prashant's UUID>", priority: "P1", due_at: "2026-03-13T17:00:00Z" }`
+
+Handles fuzzy name matching ("prash" → Prashant), relative dates ("tomorrow", "in 2 days", "friday"), and priority inference.
+
+### AI Task Suggestions
+**Route:** `POST /api/ai/suggest` | **Model:** Groq
+
+Fires automatically when creating tasks (500ms debounce after 3+ characters). Returns:
+- Suggested priority (P0–P3)
+- Recommended assignee with reasoning (considers workload, skill match, availability)
+- Estimated hours to complete
+- Suggested deadline
+
+The `estimate_hours` is saved to `ai_estimate_hours` on the task. Suggestions appear as a pill below the input.
+
+### Task Decomposition
+**Route:** `POST /api/ai/decompose` | **Model:** Claude Haiku
+
+Breaks a large task into 3–7 subtasks with:
+- Clear subtask titles
+- Hour estimates (calibrated by assignee's variance ratio)
+- Suggested assignee with reasoning
+- Priority levels
+- Dependency ordering (which subtask depends on which)
+- Overall approach summary
+
+Accessible via the "Generate Plan" button in the task detail panel.
+
+### AI Query Engine
+**Route:** `POST /api/ai/query` | **Model:** Groq
+
+Ask questions about your team and tasks from the command bar:
+- `?who is overloaded` — analyzes workload distribution
+- `?what's at risk` — identifies high-risk tasks
+- `?how is prashant doing` — individual performance summary
+
+Returns structured responses with type (info/warning/success) and optional metric highlight cards.
+
+### 1:1 Meeting Preparation
+**Route:** `POST /api/ai/prep-one-on-one` | **Model:** Claude Haiku
+
+Generates comprehensive meeting prep notes for manager-employee 1:1s. Uses employee data, active tasks, completed tasks, team averages, and performance snapshots. Returns:
+- **Praise points** — specific accomplishments to recognize
+- **Discussion items** — areas needing attention
+- **Goals** — suggested objectives for the next period
+- **Risks** — potential issues to address proactively
+- **Talking points** — conversation starters
+- **Overall assessment** — summary with sentiment
+
+Accessible via the "1:1 Prep" button in the Stats view employee table.
+
+### Calibrated Estimation
+When a task is marked as `done`:
+1. `actual_hours` is calculated: `(now - started_at) / 3600000`, rounded to 1 decimal
+2. Employee stats are recalculated across ALL completed tasks:
+   - `tasks_completed`: total count
+   - `avg_variance_ratio`: average of `actual_hours / ai_estimate_hours`
+   - `on_time_percentage`: percentage where `completed_at <= due_at`
+3. Future AI estimates are multiplied by the assignee's variance ratio for calibrated predictions
+
+---
+
+## AI Proposals System
+
+AI agents can suggest actions, but they never execute them automatically. Instead, they create **proposals** that humans review.
+
+### Proposal Types
+| Action | Description | Created By |
+|--------|-------------|------------|
+| `reassign` | Move a task from an overloaded person to someone with capacity | Risk Predictor |
+| `extend_deadline` | Push a deadline when progress indicates it's unreachable | Risk Predictor |
+| `escalate_priority` | Bump priority when risk factors indicate urgency | Risk Predictor |
+| `decompose` | Break a large task into subtasks | Task Analyzer |
+| `rebalance` | Redistribute work across the team | Risk Predictor |
+
+### Proposals Panel (Bell Icon)
+- Click the bell icon in the header to open the Proposals Panel
+- Shows all pending proposals with:
+  - Action type icon and label
+  - Which agent created it and when
+  - Reasoning explanation
+- **Approve** — executes the proposed change (e.g., reassigns the task, extends the deadline)
+- **Reject** — dismisses the proposal without action
+
+### Proposal Execution (`POST /api/proposals`)
+When approved, the system automatically executes:
+- **reassign**: Updates `assignee_id` on the task
+- **extend_deadline**: Adds proposed hours to `due_at`
+- **escalate_priority**: Updates `priority` on the task
 
 ---
 
@@ -201,50 +365,48 @@ Level 4: Manager Notification (Slack DM to manager)
 4. **If responded** — Resets `current_escalation` back to `slack`, skips further action
 5. **If no response after WAIT_MINUTES** — Moves `current_escalation` to the next level and logs an `escalation` activity
 6. **P0 escalates 2x faster** — Uses `WAIT_MINUTES * 0.5` (7.5 minutes instead of 15)
-7. **Manager notification** — When escalation reaches `manager` level, the system DMs the manager with full context: "Manager escalation: {name} is unresponsive on their task."
+7. **Manager notification** — When escalation reaches `manager` level, the system DMs the manager with full context
 
-**Response endpoint:** Developers can respond via `POST /api/tasks/[id]/respond` which:
-- Resets `current_escalation` to `slack`
-- Updates `last_response_at`
-- Optionally updates `progress_percent` and `status`
-- Logs a `tracker_response` activity
+**Response endpoint:** Developers can respond via `POST /api/tasks/[id]/respond` which resets the escalation chain.
 
 ---
 
-## AI-Powered Task Intelligence
+## Risk Scoring Engine
 
-### Auto-Estimation
-When a new task is created (non-subtask), the system fires a background request to `/api/ai/suggest` which:
+The Risk Predictor agent uses a deterministic, multi-factor algorithm to score tasks from 0–100.
 
-1. Fetches the full team context from Supabase: each employee's ID, name, role, tasks completed, on-time percentage, variance ratio, and current active task count
-2. Sends the task title, description, and team context to Claude Haiku
-3. Claude returns a JSON response with:
-   - `priority`: Suggested P0–P3 based on task nature
-   - `assignee_id`: Recommended assignee (UUID) based on workload, skill match, and availability
-   - `assignee_reason`: One-line explanation of why this person was chosen
-   - `estimate_hours`: AI-estimated hours to complete
-   - `suggested_deadline_hours`: Recommended deadline from now
-   - `reasoning`: One-line summary of the suggestion
+### Risk Factors (Raw Points)
 
-The `estimate_hours` is saved to `ai_estimate_hours` on the task. This happens fire-and-forget — it doesn't block task creation.
+| Factor | Max Points | Triggers |
+|--------|-----------|----------|
+| **Time Pressure** | 30 | Overdue (+30), Due < 4h (+25), Due < 24h (+15) |
+| **Progress Gap** | 25 | Behind expected by 40%+ (+25), 20%+ (+15), 10%+ (+8) |
+| **Assignee Reliability** | 20 | On-time rate < 70% (+20), < 85% (+10), Variance > 1.5x (+10) |
+| **Responsiveness** | 15 | No response > 4h after ping (+15), > 1h (+8) |
+| **Priority Urgency** | 10 | P0 (+10), P1 (+5) |
+| **Blocked Status** | 15 | Task is blocked (+15) |
 
-### Inline AI Suggestions
-In the task list's inline creation input, as the user types:
-- After 3+ characters and 500ms debounce, the system calls `/api/ai/suggest` with the title
-- Shows a suggestion pill below the input: "AI will assign: {name} — {reason}"
-- Suggestions auto-apply when the user submits the task (no extra step needed)
-- Shortcut syntax (`@name`, `P0-P3`, `/2d`) is stripped before sending to AI, so suggestions work even when shortcuts are present
+### Progress Gap Calculation
+Expected progress is computed using calibrated estimates:
+```
+calibratedEstimate = ai_estimate_hours × assignee.avg_variance_ratio
+expectedProgress = min((elapsedHours / calibratedEstimate) × 100, 100)
+progressGap = expectedProgress - task.progress_percent
+```
 
-### Variance Tracking
-When a task is marked as `done`:
-1. `actual_hours` is calculated: `(now - started_at) / 3600000`, rounded to 1 decimal
-2. `completed_at` is set, `progress_percent` set to 100
-3. Employee stats are recalculated by querying ALL completed tasks for that employee:
-   - `tasks_completed`: total count of `status = done` tasks
-   - `avg_variance_ratio`: average of `actual_hours / ai_estimate_hours` across all tasks that have both values
-   - `on_time_percentage`: percentage of tasks where `completed_at <= due_at`
+### Sigmoid Normalization
+Raw points are normalized to 0–100 using a sigmoid curve:
+```
+score = min(sigmoid((rawPoints - 30) / 15) × 100, 100)
+```
+This creates a natural S-curve where moderate risk starts around 30 points and saturates near 100 at ~60+ points.
 
-Over time, this builds a per-developer profile that the AI uses to improve future estimates and assignment suggestions.
+### Risk Levels
+| Score | Level | Badge Color |
+|-------|-------|-------------|
+| 60–100 | High Risk | Red |
+| 35–59 | Medium Risk | Yellow |
+| 0–34 | Low Risk | Green |
 
 ---
 
@@ -254,48 +416,34 @@ Over time, this builds a per-developer profile that the AI uses to improve futur
 - Slack app with scopes: `chat:write`, `im:write`, `im:read`, `users:read`
 - Bot token (`xoxb-...`) in `SLACK_BOT_TOKEN`
 - Dedicated channel for agent activity (e.g., `#exotask-agents`), channel ID in `SLACK_AGENT_CHANNEL_ID`
-- Employee Slack user IDs stored in the `employees.slack_id` column in Supabase
+- Employee Slack user IDs stored in the `employees.slack_id` column
 
-### Shared Slack Client (`src/lib/slack.ts`)
+### Agent Activity Logging
+Each agent has a unique visual identity in Slack:
 
-**`sendSlackDM(slackUserId, text)`**
-Opens a DM conversation with the user via `conversations.open`, then sends a message. Used by Update Checker (pings), Deadline Guardian (warnings), and escalation system (manager notifications).
+| Agent | Emoji | Color | Tagline |
+|-------|-------|-------|---------|
+| Task Analyzer | :crystal_ball: | Purple `#6C5CE7` | Strategic Analysis |
+| Daily Digest | :newspaper: | Green `#00B894` | Morning Briefing |
+| Deadline Guardian | :shield: | Red `#E17055` | Deadline Enforcement |
+| Update Checker | :satellite_antenna: | Blue `#0984E3` | Activity Monitor |
+| Risk Predictor | :robot_face: | Gray `#636E72` | Agent |
+| Performance Snapshotter | :robot_face: | Gray `#636E72` | Agent |
 
-**`postToChannel(channelId, text)`**
-Posts a plain text message to any Slack channel. General-purpose utility.
-
-**`logAgentActivity(agentName, headline, details?)`**
-The main function for agent channel posts. Produces rich Slack messages using:
-- **Attachments with colored sidebar** — each agent has a unique color:
-  - Task Analyzer: purple `#6C5CE7`
-  - Daily Digest: green `#00B894`
-  - Deadline Guardian: red `#E17055`
-  - Update Checker: blue `#0984E3`
-- **Block Kit blocks inside attachments:**
-  - Section block with bolded headline
-  - Detail blocks for each section of the message (auto-split at double newlines)
-  - Context block footer with agent emoji, tagline, date/time (IST), and "ExoTask AI" branding
-- **Text chunking** — details are split into 2900-character blocks to respect Slack's 3000-char per-block limit
-- **Fallback text** — plain text version for notifications and accessibility
+Messages use Block Kit attachments with colored sidebars, formatted sections, and IST-timestamped footers.
 
 ### Slack Slash Commands (`POST /api/slack/commands`)
 
-Five slash commands available:
+| Command | Example | Description |
+|---------|---------|-------------|
+| `/task` | `/task @prashant Fix auth P1 --due tomorrow` | Create a task from Slack |
+| `/tasks` | `/tasks @prashant` or `/tasks team` | List active tasks |
+| `/status` | `/status 70% Almost done` | Update progress on your latest task |
+| `/done` | `/done` | Mark your latest task as completed |
+| `/track` | `/track` | Tracker configuration (points to web UI) |
 
-**`/task @person Task title P1 --due tomorrow`**
-Creates a task from Slack. Parses @mentions to find employee by Slack ID, extracts priority (P0-P3), parses deadline (tomorrow, Xh, Xd). Creates the task in Supabase with the creator's employee ID. Responds in-channel with a Block Kit card showing the new task.
-
-**`/tasks` or `/tasks @person` or `/tasks team`**
-Lists active tasks. No argument shows your own tasks (matched by Slack user ID). @mention shows that person's tasks. "team" shows all tasks. Responds ephemerally with a bullet list (max 10).
-
-**`/status 70% Almost done with the auth flow`**
-Updates your most recent in-progress task's progress and logs a `progress_update` activity. Responds in-channel confirming the update.
-
-**`/done`**
-Marks your most recent active task as completed. Sets `status=done`, `progress_percent=100`, `completed_at=now()`. Deactivates the tracker queue entry. Responds with a celebration message.
-
-**`/track`**
-Placeholder for tracker configuration from Slack. Currently returns a message pointing to the web UI.
+### Fallback Behavior
+When `SLACK_BOT_TOKEN` is not configured, all Slack messages are logged to the server console instead. The system functions fully without Slack — it's an optional notification layer.
 
 ---
 
@@ -304,72 +452,51 @@ Placeholder for tracker configuration from Slack. Currently returns a message po
 ### Main Page (`src/app/page.tsx`)
 Single-page app with three views switchable via the sidebar:
 - **Tasks view** — task list with inline creation and detail panel
-- **Stats view** — team performance dashboard
-- **Tracker view** — agent monitoring and control
+- **Stats view** — team performance dashboard with AI analysis and 1:1 prep
+- **Tracker view** — agent monitoring and control (6 agents)
 
 ### Sidebar (`src/components/sidebar.tsx`)
 - Navigation: Tasks, Stats, Agents
 - Team member list with avatar initials and active task counts
 - Click a team member to filter the task list to their tasks
-- Channel links section at the bottom
 
 ### Task List (`src/components/task-list.tsx`)
-- **Inline task creation** at the top with shortcut parsing
+- **Inline task creation** with @mention autocomplete dropdown (arrow keys + Tab/Enter)
+- **Priority selector buttons** (P0–P3) in the creation toolbar
+- **Assignee chip** with remove button
 - **AI suggestion pill** appears below input after 500ms debounce
 - Tasks displayed with status icon, priority badge, title, assignee avatar, progress bar
 - Expandable subtasks (chevron toggle)
-- Tracker indicator (bot icon) for tracked tasks
-- Overdue warning indicator (triangle icon with amber color)
-- Click a task to open the detail panel
-
-**Shortcut syntax in inline input:**
-| Shortcut | Example | Effect |
-|----------|---------|--------|
-| `@name` | `@prashant` | Assigns to matching employee |
-| `P0`-`P3` | `P1` | Sets priority |
-| `/Xd` | `/2d` | Sets deadline X days from now |
-| `/Xh` | `/4h` | Sets deadline X hours from now |
-| `/Xw` | `/1w` | Sets deadline X weeks from now |
+- Tracker and overdue indicators
 
 ### Task Detail (`src/components/task-detail.tsx`)
-- Full metadata display: priority, status, assignee, dates, estimates
-- **Status workflow buttons** — click any status to transition
-- **Progress slider** — 0-100%
-- **Tracker controls**: enable/disable, set interval (15m / 30m / 1h / 2h / 4h)
-- **Subtask list** with inline add
-- **Activity timeline** showing all events chronologically with formatted timestamps
+- Full metadata display with risk score badge and calibrated estimates
+- Status workflow buttons, progress slider, tracker controls
+- AI decomposition: Generate Plan → preview → Apply Plan
+- Activity timeline with formatted timestamps
 
-### Tracker/Agent View (`src/components/tracker-view.tsx`)
-- **Agent cards** for each of the 4 agents showing:
-  - Name, description, current status (idle/running/error/disabled)
-  - Last run time (relative)
-  - Run button (manually trigger agent)
-  - Toggle switch (enable/disable)
-  - Last result message
-- **Tracked tasks section** showing all tracker-enabled tasks with:
-  - Current escalation level
-  - Last ping time
-  - Last response time
-  - Tracker interval
-  - Quick toggle to enable/disable tracking per task
+### Command Bar (`src/components/command-bar.tsx`)
+- Three-mode command palette: `/task` syntax, natural language, `?` queries
+- Inline AI query results with metric highlight cards
+- Footer showing all three input modes
 
 ### Stats View (`src/components/stats-view.tsx`)
 - **Summary cards**: total tasks, completion rate, average variance, team size
-- **Per-employee cards** showing:
-  - Avatar with initials
-  - Tasks completed count
-  - On-time percentage with color coding (green > 80%, yellow > 60%, red otherwise)
-  - Variance ratio with visual bar (1.0x = perfect estimation)
-  - Active task count
-- **AI Analysis button** — triggers the Task Analyzer agent on-demand and displays the result
+- **Per-employee table** with tasks completed, on-time %, variance ratio, active count
+- **AI Analysis button** — triggers Task Analyzer on-demand
+- **1:1 Prep button** per employee — generates meeting prep notes via Claude
+- **1:1 Prep modal** with sections: praise, discuss, goals, risks, talking points, overall assessment
 
-### Utilities (`src/lib/utils.ts`)
-- `cn()` — Tailwind class merging via `clsx` + `tailwind-merge`
-- `priorityConfig` — color and label mapping for P0-P3
-- `statusConfig` — icon, color, and label mapping for all statuses
-- `formatRelativeTime()` — "2h ago", "3d ago" style formatting
-- `displayName()` — returns nickname or first name for an employee
-- `getInitials()` — returns first letter of first and last name
+### Proposals Panel (`src/components/proposals-panel.tsx`)
+- Modal panel opened via bell icon in the header
+- Lists pending AI proposals with action type icons
+- Approve/reject buttons with loading state
+- Auto-refreshes task list on action
+
+### Tracker/Agent View (`src/components/tracker-view.tsx`)
+- **Agent cards** for all 6 agents showing status, last run time, and results
+- Run and toggle buttons for manual control
+- Tracked tasks section with escalation levels and ping times
 
 ---
 
@@ -378,134 +505,196 @@ Single-page app with three views switchable via the sidebar:
 ```
 Next.js 16 App Router (TypeScript)
 |-- src/app/
-|   |-- page.tsx                          -- Main SPA entry point
-|   |-- layout.tsx                        -- Root layout with Geist font
-|   |-- globals.css                       -- Tailwind v4 styles
+|   |-- page.tsx                              -- Main SPA entry point
+|   |-- layout.tsx                            -- Root layout with Geist font
+|   |-- globals.css                           -- Tailwind v4 styles
 |   |-- api/
 |       |-- agents/
-|       |   |-- update-checker/route.ts   -- POST: ping & escalation engine
-|       |   |-- task-analyzer/route.ts    -- POST: AI workload analysis
-|       |   |-- deadline-guardian/route.ts -- POST: deadline monitoring
-|       |   |-- daily-digest/route.ts     -- POST: AI daily standup
+|       |   |-- update-checker/route.ts       -- POST: ping & escalation engine
+|       |   |-- task-analyzer/route.ts        -- POST: AI workload analysis (Claude)
+|       |   |-- deadline-guardian/route.ts     -- POST: deadline monitoring
+|       |   |-- daily-digest/route.ts         -- POST: AI daily standup (Claude)
+|       |   |-- risk-predictor/route.ts       -- POST: risk scoring & rebalancing
+|       |   |-- performance-snapshotter/route.ts -- POST: daily metrics capture
 |       |-- ai/
-|       |   |-- suggest/route.ts          -- POST: AI task suggestions & estimation
-|       |-- cron/route.ts                 -- GET: unified cron dispatcher
+|       |   |-- suggest/route.ts              -- POST: task suggestions (Groq)
+|       |   |-- parse-command/route.ts        -- POST: NL → structured task (Groq)
+|       |   |-- query/route.ts               -- POST: AI query answering (Groq)
+|       |   |-- decompose/route.ts           -- POST: task decomposition (Claude)
+|       |   |-- prep-one-on-one/route.ts     -- POST: 1:1 meeting prep (Claude)
+|       |-- proposals/route.ts               -- GET: list, POST: approve/reject
+|       |-- cron/route.ts                    -- GET: unified cron dispatcher
 |       |-- tasks/
-|       |   |-- [id]/respond/route.ts     -- POST: developer response endpoint
-|       |-- tracker/route.ts              -- POST: legacy tracker (queue-based)
+|       |   |-- [id]/respond/route.ts        -- POST: developer response endpoint
+|       |-- tracker/route.ts                 -- POST: legacy tracker (queue-based)
 |       |-- slack/
-|           |-- commands/route.ts         -- POST: Slack slash command handler
+|           |-- commands/route.ts            -- POST: Slack slash command handler
 |-- src/components/
-|   |-- task-list.tsx                     -- Task board with inline creation
-|   |-- task-detail.tsx                   -- Task detail side panel
-|   |-- tracker-view.tsx                  -- Agent dashboard
-|   |-- stats-view.tsx                    -- Team performance metrics
-|   |-- sidebar.tsx                       -- Navigation & team list
-|   |-- command-bar.tsx                   -- Cmd+K command palette
+|   |-- task-list.tsx                        -- Task board with inline creation + @mention
+|   |-- task-detail.tsx                      -- Task detail with risk score + decomposition
+|   |-- tracker-view.tsx                     -- Agent dashboard (6 agents)
+|   |-- stats-view.tsx                       -- Team metrics + 1:1 prep
+|   |-- sidebar.tsx                          -- Navigation & team list
+|   |-- command-bar.tsx                      -- Cmd+K palette (3 modes)
+|   |-- proposals-panel.tsx                  -- AI proposal review panel
 |-- src/lib/
-|   |-- slack.ts                          -- Slack client, DMs, Block Kit posts
+|   |-- slack.ts                             -- Slack client, DMs, Block Kit posts
 |   |-- agents/
-|   |   |-- registry.ts                   -- Agent config singleton with pub/sub
-|   |   |-- types.ts                      -- Agent type definitions
+|   |   |-- registry.ts                      -- Agent config singleton (6 agents)
+|   |   |-- types.ts                         -- Agent type definitions
 |   |-- hooks/
-|   |   |-- use-tasks.ts                  -- Task CRUD, auto-estimation, stats
+|   |   |-- use-tasks.ts                     -- Task CRUD, auto-estimation, realtime
 |   |-- supabase/
-|   |   |-- client.ts                     -- Supabase browser client
-|   |   |-- types.ts                      -- Full database type definitions
-|   |-- utils.ts                          -- UI utilities
-|   |-- mock-data.ts                      -- Fallback mock employees
-|   |-- mock-store.ts                     -- In-memory mock task store
-|-- vercel.json                           -- Cron configuration
+|   |   |-- client.ts                        -- Supabase browser client
+|   |   |-- types.ts                         -- Full database type definitions
+|   |-- utils.ts                             -- UI utilities
+|   |-- mock-data.ts                         -- Fallback mock employees
+|   |-- mock-store.ts                        -- In-memory mock task store
+|-- supabase/
+|   |-- migrations/
+|       |-- 001_ai_tables.sql                -- AI tables migration
+|-- vercel.json                              -- Cron configuration
+|-- .env.example                             -- Environment variable template
 ```
 
-### API Routes Detail
+### API Routes
 
-| Route | Method | Auth | Description |
-|-------|--------|------|-------------|
-| `/api/agents/update-checker` | POST | None | Runs the Update Checker agent |
-| `/api/agents/task-analyzer` | POST | None | Runs the Task Analyzer agent (requires `ANTHROPIC_API_KEY`) |
-| `/api/agents/deadline-guardian` | POST | None | Runs the Deadline Guardian agent |
-| `/api/agents/daily-digest` | POST | None | Runs the Daily Digest agent (requires `ANTHROPIC_API_KEY`) |
-| `/api/ai/suggest` | POST | None | Returns AI suggestion for a task. Body: `{title, description?}` |
-| `/api/cron` | GET | `CRON_SECRET` (optional) | Dispatches all agents based on their intervals |
-| `/api/tasks/[id]/respond` | POST | None | Records developer response. Body: `{employee_id, message?, progress_percent?, status?}` |
-| `/api/tracker` | POST | None | Legacy queue-based tracker (uses `tracker_queue` table) |
-| `/api/slack/commands` | POST | Slack signing | Handles `/task`, `/tasks`, `/status`, `/done`, `/track` commands |
+| Route | Method | Model | Description |
+|-------|--------|-------|-------------|
+| `/api/agents/update-checker` | POST | — | Ping & escalation engine |
+| `/api/agents/task-analyzer` | POST | Claude | AI workload analysis |
+| `/api/agents/deadline-guardian` | POST | — | Deadline monitoring & alerts |
+| `/api/agents/daily-digest` | POST | Claude | AI daily standup generation |
+| `/api/agents/risk-predictor` | POST | — | Risk scoring & rebalancing proposals |
+| `/api/agents/performance-snapshotter` | POST | — | Daily metrics capture |
+| `/api/ai/suggest` | POST | Groq | Inline task suggestions |
+| `/api/ai/parse-command` | POST | Groq | Natural language → structured task |
+| `/api/ai/query` | POST | Groq | AI query answering |
+| `/api/ai/decompose` | POST | Claude | Task decomposition into subtasks |
+| `/api/ai/prep-one-on-one` | POST | Claude | 1:1 meeting preparation |
+| `/api/proposals` | GET | — | List proposals by status |
+| `/api/proposals` | POST | — | Approve/reject a proposal |
+| `/api/cron` | GET | — | Unified cron dispatcher |
+| `/api/tasks/[id]/respond` | POST | — | Developer response endpoint |
+| `/api/tracker` | POST | — | Legacy queue-based tracker |
+| `/api/slack/commands` | POST | — | Slack slash command handler |
 
 ---
 
 ## Database Schema
 
-### `employees`
+### Core Tables
+
+#### `employees`
 | Column | Type | Default | Description |
 |--------|------|---------|-------------|
 | `id` | uuid | gen_random_uuid() | Primary key |
-| `name` | text | required | Full name (e.g., "Prashant Parajuli") |
-| `nickname` | text | null | Short name for messages (e.g., "Prashant") |
+| `name` | text | required | Full name |
+| `nickname` | text | null | Short name for messages |
 | `email` | text | required | Email address |
 | `avatar_url` | text | null | Profile image URL |
-| `slack_id` | text | null | Slack user ID for DMs (e.g., "U095517FT6G") |
+| `slack_id` | text | null | Slack user ID for DMs |
 | `discord_id` | text | null | Discord user ID (future) |
 | `phone` | text | null | Phone number for voice escalation |
-| `whatsapp` | text | null | WhatsApp number for messaging escalation |
-| `role` | text | 'developer' | One of: `developer`, `lead`, `manager` |
-| `avg_variance_ratio` | float | 1.0 | Rolling average of actual_hours / ai_estimate_hours |
-| `avg_response_minutes` | float | 0 | Average response time to tracker pings |
-| `tasks_completed` | int | 0 | Total completed task count |
-| `on_time_percentage` | float | 100 | Percentage of tasks completed before deadline |
-| `is_active` | boolean | true | Whether employee is active |
-| `created_at` | timestamp | now() | Record creation time |
-| `updated_at` | timestamp | now() | Last update time |
+| `whatsapp` | text | null | WhatsApp number |
+| `role` | text | 'developer' | `developer`, `lead`, or `manager` |
+| `avg_variance_ratio` | float | 1.0 | Rolling actual/estimated hours ratio |
+| `avg_response_minutes` | float | 0 | Average response time to pings |
+| `tasks_completed` | int | 0 | Total completed count |
+| `on_time_percentage` | float | 100 | % completed before deadline |
+| `is_active` | boolean | true | Whether active |
+| `created_at` | timestamp | now() | Created |
+| `updated_at` | timestamp | now() | Updated |
 
-### `tasks`
+#### `tasks`
 | Column | Type | Default | Description |
 |--------|------|---------|-------------|
 | `id` | uuid | gen_random_uuid() | Primary key |
-| `parent_id` | uuid | null | FK to tasks (for subtasks) |
+| `parent_id` | uuid | null | FK to tasks (subtasks) |
 | `title` | text | required | Task title |
 | `description` | text | null | Full description |
-| `status` | text | 'pending' | One of: `pending`, `acknowledged`, `in_progress`, `blocked`, `review`, `done`, `cancelled` |
-| `priority` | text | 'P2' | One of: `P0`, `P1`, `P2`, `P3` |
+| `status` | text | 'pending' | `pending`, `acknowledged`, `in_progress`, `blocked`, `review`, `done`, `cancelled` |
+| `priority` | text | 'P2' | `P0`, `P1`, `P2`, `P3` |
 | `assignee_id` | uuid | null | FK to employees |
-| `created_by_id` | uuid | null | FK to employees (who created it) |
+| `created_by_id` | uuid | null | FK to employees |
 | `ai_estimate_hours` | float | null | AI-generated hour estimate |
-| `actual_hours` | float | null | Calculated on completion: (completed_at - started_at) in hours |
-| `due_at` | timestamp | null | Task deadline |
-| `started_at` | timestamp | null | When status first changed to in_progress |
-| `completed_at` | timestamp | null | When status changed to done |
-| `tracker_enabled` | boolean | false | Whether full escalation tracking is on |
-| `tracker_interval_minutes` | int | 60 | Base ping interval (before priority multiplier) |
-| `current_escalation` | text | 'slack' | Current escalation level: `slack`, `whatsapp`, `phone`, `manager` |
-| `last_ping_at` | timestamp | null | When the tracker last pinged for this task |
-| `last_response_at` | timestamp | null | When the assignee last responded |
-| `progress_percent` | int | 0 | 0-100 progress |
+| `actual_hours` | float | null | Calculated on completion |
+| `due_at` | timestamp | null | Deadline |
+| `started_at` | timestamp | null | When work began |
+| `completed_at` | timestamp | null | When marked done |
+| `tracker_enabled` | boolean | false | Whether escalation tracking is on |
+| `tracker_interval_minutes` | int | 60 | Base ping interval |
+| `current_escalation` | text | 'slack' | Current escalation level |
+| `last_ping_at` | timestamp | null | Last tracker ping |
+| `last_response_at` | timestamp | null | Last developer response |
+| `progress_percent` | int | 0 | 0–100 progress |
 | `sort_order` | int | 0 | Display ordering |
-| `created_at` | timestamp | now() | Record creation time |
-| `updated_at` | timestamp | now() | Last update time |
+| `created_at` | timestamp | now() | Created |
+| `updated_at` | timestamp | now() | Updated |
 
-### `task_activity`
+#### `task_activity`
 | Column | Type | Default | Description |
 |--------|------|---------|-------------|
 | `id` | uuid | gen_random_uuid() | Primary key |
-| `task_id` | uuid | null | FK to tasks (null for system-level events like daily digest) |
-| `actor_id` | uuid | null | FK to employees (who performed the action, null for agents) |
-| `activity_type` | text | required | One of: `created`, `status_change`, `progress_update`, `assigned`, `reassigned`, `comment`, `tracker_ping`, `tracker_response`, `escalation`, `completed`, `due_date_changed` |
-| `message` | text | null | Human-readable description of the event |
-| `metadata` | jsonb | {} | Structured data (e.g., `{new_status: "done"}`, `{escalation_level: "whatsapp"}`) |
+| `task_id` | uuid | null | FK to tasks |
+| `actor_id` | uuid | null | FK to employees (null for agents) |
+| `activity_type` | text | required | `created`, `status_change`, `progress_update`, `assigned`, `reassigned`, `comment`, `tracker_ping`, `tracker_response`, `escalation`, `completed`, `due_date_changed` |
+| `message` | text | null | Human-readable description |
+| `metadata` | jsonb | {} | Structured event data |
 | `created_at` | timestamp | now() | Event time |
 
-### `tracker_queue`
+#### `tracker_queue`
 | Column | Type | Default | Description |
 |--------|------|---------|-------------|
 | `id` | uuid | gen_random_uuid() | Primary key |
 | `task_id` | uuid | required | FK to tasks |
-| `next_check_at` | timestamp | required | When to next check this task |
-| `escalation_level` | text | 'slack' | Current escalation level |
-| `attempts_at_current_level` | int | 0 | How many pings at this level without response |
-| `is_active` | boolean | true | Whether this queue entry is active |
-| `created_at` | timestamp | now() | Record creation time |
+| `next_check_at` | timestamp | required | When to next check |
+| `escalation_level` | text | 'slack' | Current level |
+| `attempts_at_current_level` | int | 0 | Ping count at level |
+| `is_active` | boolean | true | Whether active |
+| `created_at` | timestamp | now() | Created |
 
-> **Note:** The `tracker_queue` table is used by the legacy `/api/tracker` route. The newer `/api/agents/update-checker` route manages escalation state directly on the `tasks` table via `current_escalation`, `last_ping_at`, and `last_response_at`.
+### AI Tables
+
+#### `ai_insights`
+| Column | Type | Default | Description |
+|--------|------|---------|-------------|
+| `id` | uuid | gen_random_uuid() | Primary key |
+| `type` | text | required | `risk_alert`, `rebalance_suggestion`, `pattern_observation`, `decomposition` |
+| `task_id` | uuid | null | FK to tasks |
+| `employee_id` | uuid | null | FK to employees |
+| `message` | text | required | Human-readable insight |
+| `metadata` | jsonb | {} | Structured data (risk_score, factors, etc.) |
+| `status` | text | 'pending' | `pending`, `acknowledged`, `resolved` |
+| `created_at` | timestamp | now() | Created |
+
+#### `ai_proposals`
+| Column | Type | Default | Description |
+|--------|------|---------|-------------|
+| `id` | uuid | gen_random_uuid() | Primary key |
+| `agent_id` | text | required | Which agent created this |
+| `action_type` | text | required | `reassign`, `extend_deadline`, `escalate_priority`, `decompose`, `rebalance` |
+| `target_task_id` | uuid | null | FK to tasks |
+| `proposed_changes` | jsonb | {} | What to change (e.g., `{new_assignee_id, old_assignee_id}`) |
+| `reasoning` | text | required | Why this action is suggested |
+| `status` | text | 'pending' | `pending`, `approved`, `rejected` |
+| `reviewed_at` | timestamp | null | When reviewed |
+| `created_at` | timestamp | now() | Created |
+
+#### `performance_snapshots`
+| Column | Type | Default | Description |
+|--------|------|---------|-------------|
+| `id` | uuid | gen_random_uuid() | Primary key |
+| `employee_id` | uuid | required | FK to employees |
+| `snapshot_date` | date | required | The date of capture |
+| `tasks_completed` | int | 0 | Total at snapshot time |
+| `on_time_percentage` | numeric(5,2) | 0 | On-time rate |
+| `avg_variance_ratio` | numeric(5,2) | 1.0 | Estimation accuracy |
+| `avg_response_minutes` | numeric(8,2) | 0 | Response speed |
+| `active_task_count` | int | 0 | Active tasks at capture |
+| `created_at` | timestamp | now() | Created |
+
+Unique constraint on `(employee_id, snapshot_date)` prevents duplicate daily snapshots.
 
 ---
 
@@ -514,57 +703,19 @@ Next.js 16 App Router (TypeScript)
 All types are defined in `src/lib/supabase/types.ts`:
 
 ```typescript
+// Status & Priority
 type TaskStatus = "pending" | "acknowledged" | "in_progress" | "blocked" | "review" | "done" | "cancelled";
 type TaskPriority = "P0" | "P1" | "P2" | "P3";
 type EscalationLevel = "slack" | "whatsapp" | "phone" | "manager";
-type ActivityType = "created" | "status_change" | "progress_update" | "assigned"
-  | "reassigned" | "comment" | "tracker_ping" | "tracker_response"
-  | "escalation" | "completed" | "due_date_changed";
 
-interface Employee {
-  id: string;
-  name: string;
-  nickname: string | null;
-  email: string;
-  avatar_url: string | null;
-  slack_id: string | null;
-  discord_id: string | null;
-  phone: string | null;
-  whatsapp: string | null;
-  role: "developer" | "lead" | "manager";
-  avg_variance_ratio: number;
-  avg_response_minutes: number;
-  tasks_completed: number;
-  on_time_percentage: number;
-  is_active: boolean;
-  created_at: string;
-  updated_at: string;
-}
+// AI Types
+type InsightType = "risk_alert" | "rebalance_suggestion" | "pattern_observation" | "decomposition";
+type InsightStatus = "pending" | "acknowledged" | "dismissed";
+type ProposalAction = "reassign" | "extend_deadline" | "escalate_priority" | "decompose" | "rebalance";
+type ProposalStatus = "pending" | "approved" | "rejected";
 
-interface Task {
-  id: string;
-  parent_id: string | null;
-  title: string;
-  description: string | null;
-  status: TaskStatus;
-  priority: TaskPriority;
-  assignee_id: string | null;
-  created_by_id: string | null;
-  ai_estimate_hours: number | null;
-  actual_hours: number | null;
-  due_at: string | null;
-  started_at: string | null;
-  completed_at: string | null;
-  tracker_enabled: boolean;
-  tracker_interval_minutes: number;
-  current_escalation: EscalationLevel;
-  last_ping_at: string | null;
-  last_response_at: string | null;
-  progress_percent: number;
-  sort_order: number;
-  assignee?: Employee;
-  subtasks?: Task[];
-}
+// Core Interfaces: Employee, Task, TaskActivity, TrackerQueue
+// AI Interfaces: AIInsight, AIProposal, PerformanceSnapshot
 ```
 
 Agent types in `src/lib/agents/types.ts`:
@@ -575,19 +726,12 @@ interface AgentConfig {
   id: string;
   name: string;
   description: string;
-  icon: string;           // lucide icon name
+  icon: string;
   interval_minutes: number;
   enabled: boolean;
   last_run_at: string | null;
   last_result: AgentRunResult | null;
   status: AgentStatus;
-}
-
-interface AgentRunResult {
-  success: boolean;
-  message: string;
-  data?: Record<string, unknown>;
-  timestamp: string;
 }
 ```
 
@@ -601,75 +745,85 @@ interface AgentRunResult {
   "crons": [
     {
       "path": "/api/cron",
-      "schedule": "*/5 * * * *"
+      "schedule": "0 0 * * *"
     }
   ]
 }
 ```
 
-Vercel calls `GET /api/cron` every 5 minutes.
+The cron runs daily (Vercel Hobby plan limitation). Agents can also be triggered manually from the Tracker View or via `curl`.
 
 ### Cron Dispatcher (`/api/cron/route.ts`)
 The dispatcher maintains an in-memory `lastRun` map and checks each agent's interval:
 
-| Agent | Interval | Runs every |
-|-------|----------|------------|
-| Update Checker | 5 min | Every cron invocation |
-| Deadline Guardian | 30 min | Every 6th invocation |
-| Task Analyzer | 60 min | Every 12th invocation |
+| Agent | Interval | Frequency |
+|-------|----------|-----------|
+| Update Checker | 5 min | Most frequent |
+| Deadline Guardian | 30 min | Every 30 min |
+| Task Analyzer | 60 min | Hourly |
+| Risk Predictor | 60 min | Hourly |
 | Daily Digest | 1440 min | Once per day |
+| Performance Snapshotter | 1440 min | Once per day |
 
-The dispatcher calls each agent's POST endpoint via internal fetch. The `lastRun` map resets on cold start (Vercel serverless), but that's fine — all agents are idempotent.
+The `lastRun` map resets on cold start (Vercel serverless), but all agents are idempotent.
 
 Optional `CRON_SECRET` authentication via Bearer token for production security.
 
-### Agent Registry (`src/lib/agents/registry.ts`)
-Client-side singleton that maintains agent state with pub/sub for UI reactivity:
-- `getAgents()` / `getAgent(id)` — read agent configs
-- `runAgent(id)` — calls the agent's POST endpoint, updates status
-- `toggleAgent(id)` — enable/disable an agent
-- `subscribe(listener)` — get notified when any agent state changes
+### Manual Agent Execution
+```bash
+# Individual agents
+curl -X POST http://localhost:3000/api/agents/risk-predictor
+curl -X POST http://localhost:3000/api/agents/performance-snapshotter
+curl -X POST http://localhost:3000/api/agents/task-analyzer
+curl -X POST http://localhost:3000/api/agents/deadline-guardian
+curl -X POST http://localhost:3000/api/agents/daily-digest
+curl -X POST http://localhost:3000/api/agents/update-checker
 
-The Tracker View component subscribes to the registry to show real-time agent status.
+# All agents via dispatcher
+curl http://localhost:3000/api/cron
+```
 
 ---
 
 ## Tech Stack
 
-| Layer | Technology | Version |
-|-------|-----------|---------|
-| Framework | Next.js (App Router) | 16.1.6 |
-| Language | TypeScript | 5.x |
-| UI Framework | React | 19.2.3 |
-| Styling | Tailwind CSS | v4 |
-| Database | Supabase (PostgreSQL) | 2.98.0 |
-| AI | Anthropic Claude Haiku | `claude-haiku-4-5-20251001` |
-| Messaging | Slack Web API | 7.14.1 |
-| UI Components | Radix UI (Avatar, Dialog, Dropdown, Popover, Select, Progress, Tabs, Tooltip, Separator, Slot) | Latest |
-| Command Palette | cmdk | 1.1.1 |
-| Icons | Lucide React | 0.577.0 |
-| Date Utils | date-fns | 4.1.0 |
-| CSS Utilities | clsx + tailwind-merge | Latest |
-| Deployment | Vercel | With cron jobs |
+| Layer | Technology | Version | Purpose |
+|-------|-----------|---------|---------|
+| Framework | Next.js (App Router) | 16.1.6 | Full-stack React framework |
+| Language | TypeScript | 5.x | Type-safe development |
+| UI | React | 19.2.3 | Component library |
+| Styling | Tailwind CSS | v4 | Utility-first CSS |
+| Database | Supabase (PostgreSQL) | 2.98.0 | Realtime database + auth |
+| AI (Fast) | Groq (LLaMA 3.3 70B) | 0.37.0 | Sub-200ms inline AI |
+| AI (Deep) | Anthropic Claude Haiku 4.5 | 0.78.0 | Analytical reasoning |
+| Messaging | Slack Web API | 7.14.1 | Team notifications |
+| UI Components | Radix UI | Latest | Accessible primitives |
+| Command Palette | cmdk | 1.1.1 | Cmd+K interface |
+| Icons | Lucide React | 0.577.0 | Icon library |
+| Date Utils | date-fns | 4.1.0 | Date formatting |
+| CSS Utilities | clsx + tailwind-merge | Latest | Class merging |
+| Deployment | Vercel | — | Serverless + cron |
 
 ---
 
 ## Environment Variables
 
 ```env
-# Required
+# Required — Database
 NEXT_PUBLIC_SUPABASE_URL=         # Supabase project URL
 NEXT_PUBLIC_SUPABASE_ANON_KEY=    # Supabase anonymous/publishable key
-ANTHROPIC_API_KEY=                # Anthropic API key for Claude (required for Task Analyzer, Daily Digest, AI Suggest)
+SUPABASE_SERVICE_ROLE_KEY=        # Service role key (bypasses RLS)
+
+# Required — AI
+ANTHROPIC_API_KEY=                # For Claude (agents, decompose, 1:1 prep)
+GROQ_API_KEY=                     # For Groq (suggest, parse-command, query)
 
 # Slack Integration
 SLACK_BOT_TOKEN=                  # Slack bot token (xoxb-...)
-SLACK_AGENT_CHANNEL_ID=           # Slack channel ID for agent activity posts
+SLACK_AGENT_CHANNEL_ID=           # Channel ID for agent activity posts
 
-# Optional
-SUPABASE_SERVICE_ROLE_KEY=        # Service role key for bypassing RLS (used by tracker and slash commands)
-CRON_SECRET=                      # Bearer token for cron endpoint authentication
-GROQ_API_KEY=                     # Groq API key (reserved for future use)
+# Security
+CRON_SECRET=                      # Bearer token for cron endpoint auth
 ```
 
 If `NEXT_PUBLIC_SUPABASE_URL` is empty or not set, the app falls back to mock mode with in-memory data.
@@ -681,21 +835,30 @@ If `NEXT_PUBLIC_SUPABASE_URL` is empty or not set, the app falls back to mock mo
 ### Prerequisites
 - Node.js 18+
 - A Supabase project with the schema tables created
-- An Anthropic API key
-- A Slack workspace with a bot app installed
+- An Anthropic API key (for Claude-powered agents)
+- A Groq API key (for fast inline AI)
+- (Optional) A Slack workspace with a bot app installed
 
 ### Installation
 
 ```bash
-cd app
 npm install
 ```
 
 ### Configure Environment
 
 ```bash
-cp .env.local.example .env.local
+cp .env.example .env.local
 # Edit .env.local with your credentials
+```
+
+### Set Up Database
+
+Run the core table creation SQL in Supabase SQL Editor (employees, tasks, task_activity, tracker_queue), then run the AI tables migration:
+
+```bash
+# Copy contents of supabase/migrations/001_ai_tables.sql
+# Paste into Supabase Dashboard > SQL Editor > Run
 ```
 
 ### Run Development Server
@@ -706,42 +869,29 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000).
 
-### Set Up Slack
+### Test Agents
 
-1. Go to [api.slack.com/apps](https://api.slack.com/apps) and create a new app
+```bash
+# Run all agents at once
+curl http://localhost:3000/api/cron
+
+# Or individually
+curl -X POST http://localhost:3000/api/agents/risk-predictor
+curl -X POST http://localhost:3000/api/agents/task-analyzer
+```
+
+### Set Up Slack (Optional)
+
+1. Create a Slack app at [api.slack.com/apps](https://api.slack.com/apps)
 2. Add OAuth scopes: `chat:write`, `im:write`, `im:read`, `users:read`
-3. Install the app to your workspace
-4. Copy the Bot User OAuth Token (`xoxb-...`) to `SLACK_BOT_TOKEN`
-5. Create a channel (e.g., `#exotask-agents`) and copy its channel ID to `SLACK_AGENT_CHANNEL_ID`
-6. For each team member, find their Slack user ID (Profile > More > Copy member ID) and update the `slack_id` column in the `employees` table
+3. Install to workspace, copy Bot Token to `SLACK_BOT_TOKEN`
+4. Create `#exotask-agents` channel, copy ID to `SLACK_AGENT_CHANNEL_ID`
+5. Update `slack_id` column in `employees` table for each team member
 
 ### Set Up Slash Commands (Optional)
 
-In your Slack app settings, add slash commands pointing to your deployed URL:
-- `/task` -> `https://your-domain.com/api/slack/commands`
-- `/tasks` -> `https://your-domain.com/api/slack/commands`
-- `/status` -> `https://your-domain.com/api/slack/commands`
-- `/done` -> `https://your-domain.com/api/slack/commands`
-- `/track` -> `https://your-domain.com/api/slack/commands`
-
-### Test Agents Manually
-
-```bash
-# Run the task analyzer
-curl -X POST http://localhost:3000/api/agents/task-analyzer
-
-# Run the daily digest
-curl -X POST http://localhost:3000/api/agents/daily-digest
-
-# Run the deadline guardian
-curl -X POST http://localhost:3000/api/agents/deadline-guardian
-
-# Run the update checker
-curl -X POST http://localhost:3000/api/agents/update-checker
-
-# Trigger all agents via cron dispatcher
-curl http://localhost:3000/api/cron
-```
+In Slack app settings, point all commands to your deployed URL:
+- `/task`, `/tasks`, `/status`, `/done`, `/track` → `https://your-domain.com/api/slack/commands`
 
 ---
 
@@ -750,22 +900,12 @@ curl http://localhost:3000/api/cron
 ### Vercel
 
 ```bash
-vercel deploy
+vercel deploy --prod
 ```
 
-The `vercel.json` automatically configures the cron job. Set all environment variables in the Vercel dashboard.
+Set all environment variables in Vercel Dashboard > Settings > Environment Variables.
 
-**Important:** Vercel Cron requires a Pro plan for intervals less than once per day. The `*/5 * * * *` schedule (every 5 minutes) requires Vercel Pro.
-
-### Environment Variables in Vercel
-
-Set these in Settings > Environment Variables:
-- `NEXT_PUBLIC_SUPABASE_URL`
-- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
-- `ANTHROPIC_API_KEY`
-- `SLACK_BOT_TOKEN`
-- `SLACK_AGENT_CHANNEL_ID`
-- `CRON_SECRET` (recommended for production)
+The `vercel.json` configures a daily cron job automatically. For more frequent agent runs, upgrade to Vercel Pro (supports `*/5 * * * *`).
 
 ---
 
@@ -782,12 +922,13 @@ Set these in Settings > Environment Variables:
 
 ## Future Roadmap
 
-- **WhatsApp escalation** — Twilio WhatsApp API integration for Level 2 escalation
-- **Phone call escalation** — Twilio Voice API for Level 3 with TwiML-based spoken notifications
-- **Slack signing verification** — Validate `x-slack-signature` headers on slash commands
-- **Sprint planning agent** — AI agent that suggests sprint scope based on team velocity and capacity
-- **Retrospective agent** — End-of-sprint analysis with variance trends, accuracy improvements, and team velocity charts
-- **Slack interactivity** — Button-based responses in DMs (e.g., "Mark as done", "Update progress") instead of requiring API calls
-- **GitHub/GitLab integration** — Auto-link commits and PRs to tasks, detect stale branches
+- **WhatsApp escalation** — Twilio WhatsApp API for Level 2 escalation
+- **Phone call escalation** — Twilio Voice API for Level 3 with spoken notifications
+- **Slack signing verification** — Validate `x-slack-signature` headers
+- **Slack interactivity** — Button-based responses in DMs ("Mark as done", "Update progress")
+- **Sprint planning agent** — AI agent that suggests sprint scope based on velocity and capacity
+- **Retrospective agent** — End-of-sprint analysis with variance trends and velocity charts
+- **Performance trend charts** — Visualize snapshots over time in the Stats view
+- **GitHub/GitLab integration** — Auto-link commits and PRs to tasks
 - **Mobile notifications** — Push notifications for critical escalations
-- **Multi-team support** — Support for multiple teams with separate agent channels and manager hierarchies
+- **Multi-team support** — Separate agent channels and manager hierarchies

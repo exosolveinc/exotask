@@ -51,6 +51,30 @@ const defaultAgents: AgentConfig[] = [
     last_result: null,
     status: "idle",
   },
+  {
+    id: "risk-predictor",
+    name: "Risk Predictor",
+    description:
+      "Scores active tasks for delivery risk using time pressure, progress gaps, assignee reliability, and responsiveness. Proposes workload rebalancing when imbalances are detected.",
+    icon: "shield-alert",
+    interval_minutes: 60,
+    enabled: true,
+    last_run_at: null,
+    last_result: null,
+    status: "idle",
+  },
+  {
+    id: "performance-snapshotter",
+    name: "Performance Snapshotter",
+    description:
+      "Captures daily performance snapshots for each employee (tasks completed, on-time %, variance ratio) for trend analysis.",
+    icon: "bot",
+    interval_minutes: 1440,
+    enabled: true,
+    last_run_at: null,
+    last_result: null,
+    status: "idle",
+  },
 ];
 
 class AgentRegistry {

@@ -7,6 +7,7 @@ import { TaskList } from "@/components/task-list";
 import { TaskDetail } from "@/components/task-detail";
 import { StatsView } from "@/components/stats-view";
 import { TrackerView } from "@/components/tracker-view";
+import { ProposalsPanel } from "@/components/proposals-panel";
 import { useTasks, useEmployees } from "@/lib/hooks/use-tasks";
 import { Bell } from "lucide-react";
 import { displayName } from "@/lib/utils";
@@ -17,7 +18,7 @@ export default function Home() {
   const [activeView, setActiveView] = useState("tasks");
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string | null>(null);
-
+  const [proposalsOpen, setProposalsOpen] = useState(false);
 
   return (
     <div className="flex h-screen overflow-hidden bg-zinc-950 text-zinc-100 font-[family-name:var(--font-geist-sans)]">
@@ -53,7 +54,10 @@ export default function Home() {
                 setSelectedEmployeeId(null);
               }}
             />
-            <button className="p-1.5 text-zinc-500 hover:text-zinc-300 transition-colors">
+            <button
+              onClick={() => setProposalsOpen(true)}
+              className="relative p-1.5 text-zinc-500 hover:text-zinc-300 transition-colors"
+            >
               <Bell size={16} />
             </button>
           </div>
@@ -96,6 +100,12 @@ export default function Home() {
           )}
         </div>
       </div>
+
+      <ProposalsPanel
+        open={proposalsOpen}
+        onClose={() => setProposalsOpen(false)}
+        onProposalActioned={refetch}
+      />
     </div>
   );
 }
